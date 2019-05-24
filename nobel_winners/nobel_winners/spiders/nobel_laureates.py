@@ -1,26 +1,17 @@
 # -*- coding: utf-8 -*-
 import scrapy
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
+from nobel_winners.items import NobelLaureatesItem
 
 
-class NobelLaureatesItem(scrapy.Item):
-    
-    name = scrapy.Field()
-    link = scrapy.Field()
-    year = scrapy.Field()
-    category = scrapy.Field()
-    country = scrapy.Field()
-    gender = scrapy.Field()
-    born_in = scrapy.Field()
-    date_of_birth = scrapy.Field()
-    date_of_death = scrapy.Field()
-    place_of_birth = scrapy.Field()
-    place_of_death = scrapy.Field()
-    mini_bio = scrapy.Field()
-    image_urls = scrapy.Field()
-    bio_image = scrapy.Field()
-    images = scrapy.Field()
+def rel2abs_url(url, response):
+    url_obj = urlparse(url)
+    if not url_obj.netloc:
+        return urljoin(response.url, url)
+    elif not url_obj.scheme:
+        return url_obj._replace(scheme='https').geturl()
+    return url
 
 
 class NobelLaureatesSpider(scrapy.Spider):
@@ -30,7 +21,6 @@ class NobelLaureatesSpider(scrapy.Spider):
     start_urls = ['https://en.wikipedia.org/wiki/List_of_Nobel_laureates_by_country']
 
     def parse(self, response):   
-        # Method grabs all laureates by country
         for h3 in response.css('.mw-parser-output h3'):
             country = h3.css('.mw-headline::text').get()
             if country:
@@ -57,24 +47,33 @@ class NobelLaureatesSpider(scrapy.Spider):
 
 
     def parse_bio(self, response):
+
+        def verify_matching(match_obj):
+            return rel2abs_url(match_obj.group(1), response)
+        
         item = response.meta['item']
 
+        item['image_urls'] = []
         img_src = response.css('table.infobox img::attr(src)')
-        item['image_urls'] = [img_src.get()] if img_src else []
-
-        mini_bio_lst = []
+        if img_src:
+            img_url = rel2abs_url(img_src.get(), response)
+            item['image_urls'].append(img_url) 
+       
+        mini_bio = ''
         for el in response.css('#mw-content-text > .mw-parser-output > *'):
             if el.attrib.get('id') == 'toc':
                 break
             if el.xpath('self::p'):
-                txt = ''.join(el.css('::text').getall()).strip()
-                if txt:
-                    mini_bio_lst.append(txt)
-        mini_bio = '\n'.join(mini_bio)
+                node = el.xpath('self::node()').get()
+                if node:
+                    mini_bio += node
+        mini_bio = re.sub(r'href="([^"]+)', verify_matching, mini_bio)
+        item['mini_bio'] = mini_bio
+
         wikidata_link = response.css('#t-wikibase a::attr(href)').get()
         if wikidata_link:
             request = scrapy.Request(
-                url=urljoin(re9sponse.url, wikidata_link),
+                url=urljoin(response.url, wikidata_link),
                 callback=self.parse_wikidata,
                 dont_filter=True
             )
